@@ -1,0 +1,14 @@
+# Test configuration for scaling operator tests
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+  namespace: default
+data:
+  mock-nats-url: "http://mock-nats:8222"
+  test-subject: "test.scaling.subject"
+  scale-up-threshold: "5"
+  scale-down-threshold: "2"
+  min-replicas: "1"
+  max-replicas: "10"
+  poll-interval: "5"

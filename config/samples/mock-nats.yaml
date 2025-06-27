@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-nats
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-nats
+  template:
+    metadata:
+      labels:
+        app: mock-nats
+    spec:
+      containers:
+      - name: mock-nats
+        image: golang:1.21-alpine
+        ports:
+        - containerPort: 8222
+          name: monitor
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          apk add --no-cache git curl
+          go mod init mock-nats
+          cat > main.go << 'EOF'
+          package main
+          
+          import (
+              "encoding/json"
+              "fmt"
+              "log"
+              "net/http"
+              "strconv"
+              "sync"
+          )
+          
+          type MockNATSServer struct {
+              pendingMessages map[string]int32
+              mutex           sync.RWMutex
+          }
+          
+          type Subscription struct {
+              Subject       string `json:"subject"`
+              Queue         string `json:"queue,omitempty"`
+              PendingMsgs   int32  `json:"pending_msgs"`
+              DeliveredMsgs int64  `json:"delivered_msgs"`
+              DroppedMsgs   int64  `json:"dropped_msgs"`
+              MaxPending    int32  `json:"max_pending"`
+          }
+          
+          type SubsResponse struct {
+              Subscriptions []Subscription `json:"subscriptions"`
+          }
+          
+          func NewMockNATSServer() *MockNATSServer {
+              return &MockNATSServer{
+                  pendingMessages: make(map[string]int32),
+              }
+          }
+          
+          func (m *MockNATSServer) SetPendingMessages(subject string, count int32) {
+              m.mutex.Lock()
+              defer m.mutex.Unlock()
+              m.pendingMessages[subject] = count
+              log.Printf("Set pending messages for subject '%s' to %d", subject, count)
+          }
+          
+          func (m *MockNATSServer) handleSubsz(w http.ResponseWriter, r *http.Request) {
+              m.mutex.RLock()
+              defer m.mutex.RUnlock()
+              
+              var subscriptions []Subscription
+              for subject, pending := range m.pendingMessages {
+                  subscriptions = append(subscriptions, Subscription{
+                      Subject:       subject,
+                      PendingMsgs:   pending,
+                      DeliveredMsgs: 100,
+                      DroppedMsgs:   0,
+                      MaxPending:    1000,
+                  })
+              }
+              
+              response := SubsResponse{Subscriptions: subscriptions}
+              w.Header().Set("Content-Type", "application/json")
+              json.NewEncoder(w).Encode(response)
+          }
+          
+          func (m *MockNATSServer) handleSet(w http.ResponseWriter, r *http.Request) {
+              subject := r.URL.Query().Get("subject")
+              countStr := r.URL.Query().Get("count")
+              
+              if subject == "" || countStr == "" {
+                  http.Error(w, "Missing subject or count", http.StatusBadRequest)
+                  return
+              }
+              
+              count, err := strconv.ParseInt(countStr, 10, 32)
+              if err != nil {
+                  http.Error(w, "Invalid count", http.StatusBadRequest)
+                  return
+              }
+              
+              m.SetPendingMessages(subject, int32(count))
+              fmt.Fprintf(w, "Set %s to %d pending messages\n", subject, count)
+          }
+          
+          func main() {
+              server := NewMockNATSServer()
+              
+              // Initialize with some default data
+              server.SetPendingMessages("my.queue.subject", 0)
+              
+              http.HandleFunc("/subsz", server.handleSubsz)
+              http.HandleFunc("/set", server.handleSet)
+              
+              log.Println("Mock NATS server starting on :8222")
+              log.Fatal(http.ListenAndServe(":8222", nil))
+          }
+          EOF
+          go run main.go
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-nats
+  namespace: default
+spec:
+  selector:
+    app: mock-nats
+  ports:
+  - name: monitor
+    port: 8222
+    targetPort: 8222
+  type: ClusterIP

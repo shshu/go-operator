@@ -1,0 +1,17 @@
+apiVersion: scaling.example.com/v1
+kind: ScalingRule
+metadata:
+  labels:
+    app.kubernetes.io/name: go-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: scalingrule-sample
+spec:
+  deploymentName: "my-app"
+  namespace: "default"
+  minReplicas: 1
+  maxReplicas: 5
+  natsMonitoringURL: "http://mock-nats:8222"
+  subject: "my.queue.subject"
+  scaleUpThreshold: 3
+  scaleDownThreshold: 1
+  pollIntervalSeconds: 10
